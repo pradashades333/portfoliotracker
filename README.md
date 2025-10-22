@@ -25,3 +25,9 @@ Stock – Fetches stock prices via Yahoo Finance
 Portfolio – Manages assets (add, edit, remove, export)
 
 PortfolioApp – Console interface for user interaction
+
+
+GOALS:
+-Add the price from a specific time
+-Track profit
+-Add an interface
