@@ -1,6 +1,7 @@
 import yfinance as yf
 import requests
 import pandas as pd
+from datetime import datetime
 
 class Asset:
     def __init__(self, name, amount, value, currency, pp_unit ):
@@ -49,7 +50,28 @@ class Crypto(Asset):
             return data[coin_id][currency]
         else:
             return None
+    
+    @staticmethod
+    def crypto_time(coin_id, currency, date):
+        try:
+
+            date = datetime.strptime(date, "%Y-%m-%d")
+            date_format = date.strftime(("%d-%m-%Y"))
+
+            url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/history"
+            params = {'date':date_format}
+            response = requests.get(url, params = params)
+
+            if response.status_code == 200:
+                data = response.json()
+                return data['market_data']['current_price'].get(currency)
+            else:
+                return None
+        except Exception as e:
+            print(f"Error fetching historical price: {e}")
+            return None
         
+    
 
 class Stock(Asset):
 
@@ -78,6 +100,36 @@ class Stock(Asset):
         else:
             return None
         
+    @staticmethod
+    def stock_time(stock_name, currency, date):
+        try:
+            stock = yf.Ticker(stock_name)
+            hist = stock.history(start = date, end  = date)
+
+            if hist.empty:
+                return None
+            
+            stock_price_usd = hist['Close'].iloc[0]
+            if currency.upper() == "USD":
+                return stock_price_usd
+
+            
+            forex_pair = f"{currency.upper()}USD=X"
+            forex = yf.Ticker(forex_pair)
+            forex_time = forex.history(start=date, end=date)
+
+            if not forex_time.empty:
+                exchange_rate = forex_time['Close'].iloc[0]
+                return stock_price_usd / exchange_rate
+            else:
+                return None
+        except Exception as e:
+            print(f"Error fetching historical stock price: {e}")
+            return None
+
+
+            
+    
 
 class Portfolio:
     def __init__(self):
