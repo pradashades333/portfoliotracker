@@ -1,9 +1,12 @@
 import yfinance as yf
+import json
+import os
 import requests
 import pandas as pd
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from coinnames import coin_aliases_full
 
 class Asset:
     def __init__(self, name, amount, value, currency, pp_unit):
@@ -25,18 +28,8 @@ class Asset:
             "pp_unit": self.pp_unit
         }
     
-
 class Crypto(Asset):
-    coin_aliases = {
-        "btc": "bitcoin",
-        "bitcoin": "bitcoin",
-        "eth": "ethereum",
-        "ethereum": "ethereum",
-        "cro": "crypto-com-chain",
-        "crypto.com": "crypto-com-chain",
-        "sol": "solana",
-        "solana": "solana"
-    }
+    coin_aliases = coin_aliases_full
 
     def get_type(self):
         return "crypto"
@@ -131,19 +124,20 @@ class Stock(Asset):
         except Exception as e:
             print(f"Error fetching historical stock price: {e}")
             return None
-
-
-#class Cash(Asset):
-    #def get_type(self):
-        #print("cash")
-
-
+        
+class Cash(Asset):
+    def get_type(self):
+        return "cash"
+    
+    def __init__(self, name, amount, currency):
+        super().__init__(name, amount, amount, currency, 1.0)
 
 
 class Portfolio:
     def __init__(self):
         self.assets = {}
         self.currency = None
+        self.save_file = "saved_port.json"
 
     def set_currency(self, currency):
         self.currency = currency.lower()
@@ -192,8 +186,17 @@ class Portfolio:
         for name, asset in self.assets.items():
             if asset.get_type() == "crypto":
                 current_price = Crypto.crypto_price(name, self.currency)
-            else:
+            elif asset.get_type() == "stock":
                 current_price = Stock.stock_price(asset.name, self.currency)
+            elif asset.get_type() == "cash":
+                print(f"{name.capitalize()} (cash):")
+                print(f"  Amount: {asset.currency} {asset.amount:.2f}")
+                print(f"  Value: {asset.currency} {asset.value:.2f}\n")
+                total_current_value += asset.value
+                total_purchase_value += asset.value
+                continue
+
+            
             
             if current_price:
                 current_value = asset.amount * current_price
@@ -265,6 +268,83 @@ class Portfolio:
     def is_empty(self):
         return len(self.assets) == 0
     
+    def save_to_file(self, filename = None):
+        if filename is None:
+            filename = self.save_file
+        data = {
+            "currency": self.currency,
+            "assets": {}
+        }
+    
+        for name, asset in self.assets.items():
+            data["assets"][name] = {
+                "type": asset.get_type(),
+                "name": asset.name,
+                "amount": asset.amount,
+                "value": asset.value,
+                "currency": asset.currency,
+                "pp_unit": asset.pp_unit
+            }
+        try:
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=4)
+            print(f"Portfolio saved to {filename}")
+            return True
+        except Exception as e:
+            print(f"Error saving portfolio: {e}")
+            return False
+        
+    def load_from_file(self, filename=None):
+        if filename is None:
+            filename = self.save_file
+        
+        if not os.path.exists(filename):
+            print(f"No saved portfolio found at {filename}")
+            return False
+        
+        try:
+            with open(filename, 'r') as f:
+                data = json.load(f)
+            
+            self.currency = data.get("currency")
+            self.assets = {}
+            
+            for name, asset_data in data.get("assets", {}).items():
+                asset_type = asset_data["type"]
+                
+                if asset_type == "crypto":
+                    asset = Crypto(
+                        name=asset_data["name"],
+                        amount=asset_data["amount"],
+                        value=asset_data["value"],
+                        currency=asset_data["currency"],
+                        pp_unit=asset_data["pp_unit"]
+                    )
+                elif asset_type == "stock":
+                    asset = Stock(
+                        name=asset_data["name"],
+                        amount=asset_data["amount"],
+                        value=asset_data["value"],
+                        currency=asset_data["currency"],
+                        pp_unit=asset_data["pp_unit"]
+                    )
+                elif asset_type == "cash":
+                    asset = Cash(
+                        name = asset_data["name"],
+                        amount = asset_data["amount"],
+                        currency=asset_data["currency"]
+                    )
+                else:
+                    continue
+                
+                self.assets[name] = asset
+            
+            print(f"Portfolio loaded from {filename}")
+            return True
+        except Exception as e:
+            print(f"Error loading portfolio: {e}")
+            return False
+
 
 class PortfolioApp:
 
@@ -356,6 +436,20 @@ class PortfolioApp:
         else:
             print("Could not fetch stock price. Check the ticker name.")
 
+    def add_cash(self):
+        print("You selected cash")
+        cash_name = input("Type a name for this cash(saving, birthday money, etc)")
+        cash_amount = float(input("How much cash?"))
+
+        print(f"Added {self.portfolio.currency.upper()} {cash_amount:.2f} in {cash_name.capitalize()}")
+
+        cash_asset = Cash(cash_name, cash_amount, self.portfolio.currency.upper())
+
+        if self.portfolio.asset_exists(cash_name):
+            self.portfolio.update_existing_asset(cash_name, 0, cash_amount)
+        else:
+            self.portfolio.add_asset(cash_name, cash_asset)
+
     def adding_assets(self):
         if not self.portfolio.currency:
             currency = input("Type in your desired currency (eur or usd): ").strip().lower()
@@ -367,6 +461,8 @@ class PortfolioApp:
             self.add_crypto()
         elif asset_type == "stock":
             self.add_stock()
+        elif asset_type == "cash":
+            self.add_cash()
         else:
             print("Invalid asset type")
 
@@ -423,9 +519,19 @@ class Gui(tk.Tk):
         self.title("Portfolio Tracker")
         self.geometry("1200x700")
         self.configure(bg="#f0f0f0")
+
+        self.portfolio.load_from_file()
         
         self.create_widgets()
         
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        if not self.portfolio.is_empty():
+            if self.portfolio.currency:
+                self.currency_var.set(self.portfolio.currency.upper())
+            self.refresh_portfolio()
+
+
     def create_widgets(self):
         top_frame = tk.Frame(self, bg="#2c3e50", padx=20, pady=15)
         top_frame.pack(fill=tk.X)
@@ -478,6 +584,8 @@ class Gui(tk.Tk):
         tk.Button(bottom_frame, text="Remove Asset", bg="#e74c3c", fg="white", command=self.remove_asset, **btn_style).pack(side=tk.LEFT, padx=5)
         tk.Button(bottom_frame, text="Refresh Prices", bg="#f39c12", fg="white", command=self.refresh_portfolio, **btn_style).pack(side=tk.LEFT, padx=5)
         tk.Button(bottom_frame, text="Export to CSV", bg="#9b59b6", fg="white", command=self.export_portfolio, **btn_style).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(bottom_frame, text="Save Portfolio", bg="#16a085", fg="white", command=self.save_portfolio, **btn_style).pack(side=tk.LEFT, padx=5)
         
         self.portfolio.set_currency(self.currency_var.get())
         
@@ -500,8 +608,23 @@ class Gui(tk.Tk):
         for name, asset in self.portfolio.assets.items():
             if asset.get_type() == "crypto":
                 current_price = Crypto.crypto_price(name, self.portfolio.currency)
-            else:
+            elif asset.get_type() == "stock":
                 current_price = Stock.stock_price(asset.name, self.portfolio.currency)
+            else:
+                self.tree.insert("", tk.END, values=(
+                name.capitalize(),
+                "Cash",
+                f"{asset.amount:.2f}",
+                f"{asset.currency} 1.00",
+                f"{asset.currency} 1.00",
+                f"{asset.currency} {asset.value:.2f}",
+                f"{asset.currency} {asset.value:.2f}",
+                f"{asset.currency} 0.00"
+            ))
+            
+                total_current_value += asset.value
+                total_purchase_value += asset.value
+                continue
             
             if current_price:
                 current_value = asset.amount * current_price
@@ -599,6 +722,18 @@ class Gui(tk.Tk):
         if filename:
             if self.portfolio.export_to_csv(filename):
                 messagebox.showinfo("Success", f"Portfolio exported to {filename}")
+
+    def on_closing(self):
+        if not self.portfolio.is_empty():
+            self.portfolio.save_to_file()
+        self.destroy()
+
+    def save_portfolio(self):
+        if self.portfolio.is_empty():
+            messagebox.showwarning("Empty Portfolio", "Nothing to save.")
+            return
+        if self.portfolio.save_to_file():
+            messagebox.showinfo("Success", "Portfolio saved successfully")
     
 
 class AddAssetDialog(tk.Toplevel):
@@ -623,8 +758,9 @@ class AddAssetDialog(tk.Toplevel):
         type_frame.pack(fill=tk.X, padx=20, pady=10)
         
         self.asset_type_var = tk.StringVar(value="crypto")
-        tk.Radiobutton(type_frame, text="Cryptocurrency", variable=self.asset_type_var, value="crypto", bg="#ecf0f1", font=("Arial", 10), command=self.on_type_change).pack(anchor=tk.W, pady=5)
-        tk.Radiobutton(type_frame, text="Stock", variable=self.asset_type_var, value="stock", bg="#ecf0f1", font=("Arial", 10), command=self.on_type_change).pack(anchor=tk.W, pady=5)
+        tk.Radiobutton(type_frame, text="Cryptocurrency", variable=self.asset_type_var, value = "crypto", bg="#ecf0f1", font=("Arial", 10), command=self.on_type_change).pack(anchor=tk.W, pady=5)
+        tk.Radiobutton(type_frame, text="Stock", variable=self.asset_type_var, value = "stock", bg="#ecf0f1", font=("Arial", 10), command=self.on_type_change).pack(anchor=tk.W, pady=5)
+        tk.Radiobutton(type_frame, text="Cash",variable=self.asset_type_var, value  = "cash", bg = "#2dc416" , font = ("Arial", 10),  command=self.on_type_change).pack(anchor=tk.W, pady=5)
         
         details_frame = tk.LabelFrame(self, text="Asset Details", bg="#ecf0f1", font=("Arial", 10, "bold"), padx=20, pady=10)
         details_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
@@ -657,9 +793,24 @@ class AddAssetDialog(tk.Toplevel):
         
         tk.Button(button_frame, text="Add Asset", bg="#27ae60", fg="white", font=("Arial", 10, "bold"), width=12, command=self.add_asset).pack(side=tk.LEFT, padx=10)
         tk.Button(button_frame, text="Cancel", bg="#95a5a6", fg="white", font=("Arial", 10, "bold"), width=12, command=self.destroy).pack(side=tk.LEFT, padx=10)
+
+
     
     def on_type_change(self):
-        pass
+        if self.asset_type_var.get() == "cash":
+            self.price_method_label.grid_remove()
+            self.price_method_frame.grid_remove()
+            self.price_label.grid_remove()
+            self.price_entry.grid_remove()
+            self.date_label.grid_remove()
+            self.date_entry.grid_remove()
+        else:
+            self.price_method_label.grid()
+            self.price_method_frame.grid()
+            self.price_label.grid()
+            self.price_entry.grid()
+            self.date_label.grid()
+            self.date_entry.grid()    
     
     def on_price_method_change(self):
         if self.price_method_var.get() == "manual":
@@ -677,6 +828,14 @@ class AddAssetDialog(tk.Toplevel):
             
             if not name or amount <= 0:
                 messagebox.showerror("Invalid Input", "Please enter valid asset name and amount")
+                return
+            
+            if asset_type == "cash":
+                cash_asset = Cash(name, amount, self.portfolio.currency.upper())
+                self.portfolio.add_asset(name, cash_asset)
+                messagebox.showinfo("Success", f"Added {self.portfolio.currency.upper()} {amount:.2f} in {name.capitalize()}")
+                self.refresh_callback()
+                self.destroy()
                 return
             
             if self.price_method_var.get() == "manual":
@@ -770,7 +929,7 @@ class EditAssetDialog(tk.Toplevel):
         
         tk.Button(button_frame, text="Update", bg="#3498db", fg="white", font=("Arial", 10, "bold"), width=12, command=self.update_asset).pack(side=tk.LEFT, padx=10)
         tk.Button(button_frame, text="Cancel", bg="#95a5a6", fg="white", font=("Arial", 10, "bold"), width=12, command=self.destroy).pack(side=tk.LEFT, padx=10)
-    
+
     def update_asset(self):
         try:
             new_amount = float(self.new_amount_entry.get())

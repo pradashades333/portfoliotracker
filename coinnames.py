@@ -1,4 +1,4 @@
-coin_aliases = {
+coin_aliases_full = {
     # Bitcoin
     "btc": "bitcoin",
     "bitcoin": "bitcoin",
